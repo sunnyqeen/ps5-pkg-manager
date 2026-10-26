@@ -62,9 +62,11 @@ typedef struct {
 typedef struct {
     int is_multipart;
     int is_smb;
+    int is_http;           /* Remote http:// package, ranged GET */
     int is_live;           /* NEW: RAM live session (ws_stream.c), no file */
     void *live;            /* ws_stream session handle (global singleton) */
     void *smb_session;
+    void *http_session;
     uint32_t current_part;
     uint32_t total_parts;
     uint64_t total_pkg_size;
@@ -145,8 +147,11 @@ void virtual_stream_close(virtual_stream_t *stream);
  */
 const char *virtual_stream_get_smb_url(const virtual_stream_t *stream);
 
+/* http:// backing file for a private per-connection range client. NULL otherwise. */
+const char *virtual_stream_get_http_url(const virtual_stream_t *stream);
+
 /**
- * Checks if a package source path exists and is accessible (local file, SMB, or live).
+ * Checks if a package source path exists and is accessible (local file, SMB, HTTP, or live).
  * Returns 0 if accessible, negative if missing or inaccessible.
  */
 int virtual_stream_check_path(const char *path);

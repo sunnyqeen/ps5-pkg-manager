@@ -62,7 +62,7 @@ export default function DrivesView({ drives, storage, onSelectDrive, onDirectIns
                     </div>
                     <div className="min-w-0 flex-1">
                       <h3 className="text-base font-bold text-white">Direct Install</h3>
-                      <p className="text-xs font-mono text-zinc-400 mt-0.5 truncate">Stream a .pkg from this computer</p>
+                      <p className="text-xs font-mono text-zinc-400 mt-0.5 truncate">From this computer or a web link</p>
                     </div>
                   </button>
                 )}

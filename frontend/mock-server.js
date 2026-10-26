@@ -10,6 +10,32 @@ const __dirname = path.dirname(__filename);
 
 const PORT = 8844;
 
+// Preset Direct Install links. The page still adds them through the normal probe.
+const mockRemoteLinks = [
+  {
+    url: 'http://192.168.1.20:8080/Astraea_Veil_of_Cygnus.pkg',
+    filename: 'Astraea_Veil_of_Cygnus.pkg',
+    title_id: 'PPSA01001',
+    title_name: 'Astraea: Veil of Cygnus',
+    content_id: 'EP9000-PPSA01001_00-ASTRAEACYGNUS001',
+    app_version: '01.000.000',
+    pkg_type: 'base',
+    file_size: 48318382080,
+    sdk_version: 0,
+  },
+  {
+    url: 'https://cdn.example/games/Solvanna_Sands_of_Aeon.pkg',
+    filename: 'Solvanna_Sands_of_Aeon.pkg',
+    title_id: 'PPSA01002',
+    title_name: 'Solvanna: Sands of Aeon',
+    content_id: 'EP9000-PPSA01002_00-SOLVANNASANDS001',
+    app_version: '01.020.000',
+    pkg_type: 'base',
+    file_size: 21474836480,
+    sdk_version: 0,
+  },
+];
+
 // 14 fictional, original packages spanning USB, Disc, and two Samba shares
 const examplePkgs = [
   // --- USB Drive 0 (/mnt/usb0) ---
@@ -1122,6 +1148,65 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ can_install: !reason, install_disabled_reason: reason,
         is_installed: !!installed, installed_version: installed?.installed_version || '' }));
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/api/upload/remote') {
+      let body = {};
+      try { body = JSON.parse(await readBody() || '{}'); } catch (e) {}
+      const raw = String(body.url || '').trim();
+      let parsed;
+      if (!raw) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Enter an http:// or https:// link' }));
+        return;
+      }
+      try { parsed = new URL(raw); } catch (e) { parsed = null; }
+      if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Only http:// and https:// links are supported' }));
+        return;
+      }
+      if (parsed.username || parsed.password) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Links with a username or password are not supported' }));
+        return;
+      }
+      parsed.hash = '';
+      if ((parsed.protocol === 'http:' && parsed.port === '80') || (parsed.protocol === 'https:' && parsed.port === '443')) parsed.port = '';
+      const url = parsed.href;
+      if (url.length >= 512) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'That link is too long' }));
+        return;
+      }
+      let filename = 'package.pkg';
+      try {
+        const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
+        if (name) filename = name;
+      } catch (e) {}
+      const preset = mockRemoteLinks.find((link) => link.url === url);
+      const remotePkg = {
+        path: url,
+        filename: preset?.filename || filename,
+        title_id: preset?.title_id || 'PPSA01990',
+        title_name: preset?.title_name || 'Remote Link Package',
+        content_id: preset?.content_id || 'EP9000-PPSA01990_00-REMOTELINK00001',
+        app_version: preset?.app_version || '01.000.000',
+        pkg_type: preset?.pkg_type || 'base',
+        category: 'gd',
+        file_size: preset?.file_size || 2147483648,
+        total_pkg_size: preset?.file_size || 2147483648,
+        has_icon: true, is_installed: false, installed_version: '', is_dlc_installed: false,
+        can_install: true, install_disabled_reason: '', sdk_version: preset?.sdk_version || 0,
+      };
+      if (!examplePkgs.some((pkg) => pkg.path === url)) examplePkgs.push(remotePkg);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true, url, filename, title_name: remotePkg.title_name, title_id: remotePkg.title_id,
+        content_id: remotePkg.content_id, app_version: remotePkg.app_version, pkg_type: remotePkg.pkg_type,
+        file_size: remotePkg.file_size, total_pkg_size: remotePkg.total_pkg_size, sdk_version: 0,
+        has_icon: true, can_install: true, install_disabled_reason: '', is_installed: false, installed_version: '',
+      }));
       return;
     }
     if (req.method === 'POST' && pathname === '/api/upload/init') {

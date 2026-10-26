@@ -68,6 +68,11 @@ export function getSourceInfo(pkgPath, drivesList = []) {
     };
   }
 
+  const link = pkgPath.startsWith('pass:') ? pkgPath.slice(5) : pkgPath;
+  if (/^https?:\/\//i.test(link)) {
+    return { id: 'url', name: 'URL', type: 'url' };
+  }
+
   const mntMatch = pkgPath.match(/^\/mnt\/([^\/]+)/i);
   if (mntMatch) {
     let name = mntMatch[1].toUpperCase();

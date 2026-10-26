@@ -8,6 +8,7 @@
 #include "pkg_cache.h"
 #include "pkg_parser.h"
 #include "smb_client.h"
+#include "http_pkg.h"
 #include "icon_blurhash.h"
 #include "miniz.h"
 #include <stdio.h>
@@ -253,6 +254,7 @@ int pkg_cache_calc_checksum(const char *pkg_path, char *out_checksum, size_t out
     if (strncmp(pkg_path, "smb://", 6) == 0) {
         return smb_client_calc_checksum(pkg_path, out_checksum, out_max);
     }
+    if (http_pkg_is_url(pkg_path)) return -1;
 
     struct stat st;
     if (stat(pkg_path, &st) != 0) return -1;

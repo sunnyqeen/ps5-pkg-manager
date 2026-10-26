@@ -10,6 +10,7 @@
 #include "installer.h"
 #include "stream_debug_log.h"
 #include "smb_client.h"
+#include "http_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -378,7 +379,8 @@ typedef enum { SERVE_CLOSE = 0, SERVE_KEEP = 1 } serve_verdict_t;
 static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer,
                                          uint64_t t_start_ms, int req_no,
                                          char *req, size_t rlen,
-                                         smb_file_session_t *conn_smb);
+                                         smb_file_session_t *conn_smb,
+                                         http_pkg_session_t *conn_http);
 
 static void serve_connection(int conn, int conn_id, const char *peer_str) {
     const char *peer = (peer_str && peer_str[0] != '\0') ? peer_str : "unknown";
@@ -405,9 +407,11 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
      * concurrent range requests from the PS5 read from the NAS in parallel
      * over independent TCP connections without lock contention or seek jitter. */
     smb_file_session_t *conn_smb = NULL;
+    http_pkg_session_t *conn_http = NULL;
     virtual_stream_t *vp_init = stream_vs_acquire();
     if (vp_init != NULL) {
         const char *smb_url = virtual_stream_get_smb_url(vp_init);
+        const char *http_url = virtual_stream_get_http_url(vp_init);
         if (smb_url != NULL) {
             conn_smb = smb_file_session_open(smb_url);
             if (conn_smb) {
@@ -416,6 +420,15 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
             } else {
                 install_log("[STREAM] conn #%d peer=%s WARNING: failed to open private SMB session, using fallback",
                             conn_id, peer);
+            }
+        } else if (http_url != NULL) {
+            char http_err[160];
+            if (http_pkg_session_open(http_url, &conn_http, http_err, sizeof(http_err)) == 0) {
+                install_log("[STREAM] conn #%d peer=%s opened private HTTP session for parallel read",
+                            conn_id, peer);
+            } else {
+                install_log("[STREAM] conn #%d peer=%s WARNING: failed to open private HTTP session, using fallback: %s",
+                            conn_id, peer, http_err[0] ? http_err : "open failed");
             }
         }
         stream_vs_release();
@@ -506,7 +519,7 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
             }
         }
 
-        serve_verdict_t v = serve_one_request(conn, conn_id, peer, t_start_ms, req_no, req, rlen, conn_smb);
+        serve_verdict_t v = serve_one_request(conn, conn_id, peer, t_start_ms, req_no, req, rlen, conn_smb, conn_http);
         reqs_served++;
         if (overflow) {
             v = SERVE_CLOSE;
@@ -520,6 +533,10 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
         smb_file_session_close(conn_smb);
         conn_smb = NULL;
     }
+    if (conn_http != NULL) {
+        http_pkg_session_close(conn_http);
+        conn_http = NULL;
+    }
 
     stream_debug_log("[STREAM] conn #%d peer=%s finished reqs=%d (elapsed=%llums)",
                      conn_id, peer, reqs_served,
@@ -531,7 +548,8 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
 static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer,
                                          uint64_t t_start_ms, int req_no,
                                          char *req, size_t rlen,
-                                         smb_file_session_t *conn_smb) {
+                                         smb_file_session_t *conn_smb,
+                                         http_pkg_session_t *conn_http) {
 
     char line[512];
     size_t li = 0;
@@ -887,6 +905,8 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
         ssize_t n;
         if (conn_smb != NULL) {
             n = smb_file_session_read(conn_smb, sbuf, want, off);
+        } else if (conn_http != NULL) {
+            n = http_pkg_session_read(conn_http, sbuf, want, off);
         } else {
             n = virtual_stream_read(vp, off, sbuf, want);
         }

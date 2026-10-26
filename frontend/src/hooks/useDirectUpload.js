@@ -414,8 +414,8 @@ export function useDirectUpload() {
       setSessionId(init.session_id || '');
       setOffset(Math.min(file.size, baselineSeg * SEG));
       if (init.session_id && pkg.icon_size) {
-        const icon = file.slice(pkg.icon_offset, pkg.icon_offset + pkg.icon_size, 'image/png');
-        try { await uploadSessionIcon(getOwner(), init.session_id, icon); } catch (e) {}
+        const slice = file.slice(pkg.icon_offset, pkg.icon_offset + pkg.icon_size, 'image/png');
+        try { await uploadSessionIcon(getOwner(), init.session_id, slice); } catch (e) {}
       }
       if (isStale() || userCanceledRef.current || cancelRef.current) throw new Error('Canceled');
       if (init.session_id) pollHeader(init.session_id, isStale, item.jobId);

@@ -166,6 +166,16 @@ test('resolveDrive falls back to localStorage SMB share with subpath', () => {
   }
 });
 
+test('getSourceInfo labels http and https package links as URL', () => {
+  const httpPkg = getSourceInfo('http://192.168.1.20:8080/Astraea_Veil_of_Cygnus.pkg');
+  assert.equal(httpPkg.name, 'URL');
+  assert.equal(httpPkg.type, 'url');
+  const httpsPkg = getSourceInfo('pass:https://cdn.example/games/Solvanna_Sands_of_Aeon.pkg');
+  assert.equal(httpsPkg.name, 'URL');
+  assert.equal(httpsPkg.id, 'url');
+  assert.equal(getSourceInfo('/mnt/usb0/game.pkg').name, 'USB0');
+});
+
 test('getSourceInfo matches most specific SMB drive when multiple shares use same server and share', () => {
   const drives = [
     { id: 'smb_ps5', label: 'PS5 Games', path: 'smb://192.168.1.50/games/PS5', type: 'smb' },

@@ -55,7 +55,12 @@ export function createMockInstallQueue({ packages, start, status, stop, upload, 
     if (status().is_installing) return;
     const next = [...jobs].sort((a, b) => a.order - b.order).find((job) => job.state === 'queued');
     if (!next) return;
-    const pkg = packages.find((pkg) => pkg.path === next.path);
+    const passthrough = !next.sourceOwner && String(next.path || '').startsWith('pass:');
+    const pkg = passthrough ? {
+      path: next.path, title_id: next.title_id, title_name: next.title_name || 'Package',
+      content_id: next.content_id || '', total_pkg_size: next.total_bytes || 0, file_size: next.total_bytes || 0,
+      can_install: true,
+    } : packages.find((pkg) => pkg.path === next.path);
     const refusal = next.sourceOwner ? browserRefusal(next) : '';
     if (refusal) { next.state = 'aborted'; next.error = refusal; return; }
     if (!next.sourceOwner && !pkg) { next.state = 'failed'; next.error = 'Package source unavailable. Reconnect and retry.'; return; }
