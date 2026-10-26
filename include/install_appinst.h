@@ -12,6 +12,8 @@ typedef struct {
     const char *content_id;
     const char *content_name;
     const char *icon_url;
+    unsigned int slot;
+    unsigned int is_playgo_enabled;
 } pkg_metadata_t;
 
 typedef struct {
