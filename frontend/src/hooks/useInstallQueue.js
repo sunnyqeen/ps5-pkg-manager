@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { enqueueJobs, getInstallQueue, getQueueOwner, cancelQueueJob, retryQueueJob,
   clearFinishedJobs, heartbeatQueue, disconnectQueueSource, packageJob } from '../api/queue';
-import { checkUploadEligibility } from '../api/directInstall';
+import { checkUploadEligibility, probeRemotePackage } from '../api/directInstall';
 import { parseLocalPkg } from '../utils/parseLocalPkg';
-import { fileKey, pendingStates, terminalStates, queueOverview, orderBrowserFiles, canQueueBrowserFile } from '../utils/installQueue';
+import { passthroughJobPath } from '../utils/remoteHttpsFile';
+import { fileKey, pendingStates, terminalStates, queueOverview, orderBrowserFiles, canQueueBrowserFile, canQueueRemote } from '../utils/installQueue';
 import { useWakeLock } from './useWakeLock';
 import { getBrowserTitle, formatInstallTitle } from '../utils/title';
 
@@ -11,10 +12,12 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
   const [snapshot, setSnapshot] = useState({ jobs: [], active_id: 0 });
   const [connected, setConnected] = useState(true);
   const [files, setFiles] = useState([]);
+  const [remotes, setRemotes] = useState([]);
   const [skipped, setSkipped] = useState([]);
   const latest = useRef({ upload, showToast, onResolved, files, snapshot });
   latest.current = { upload, showToast, onResolved, files, snapshot };
   const filesRef = useRef(new Map());
+  const remotesRef = useRef(new Map());
   const enqueuingFiles = useRef(new Map());
   const uploading = useRef(0);
   const started = useRef(new Map());
@@ -162,8 +165,10 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
           local.details = await parseLocalPkg(local.file);
           if (filesRef.current.get(local.id) !== local) continue;
           if (local.details.icon_size > 0) {
-            local.iconUrl = URL.createObjectURL(local.file.slice(local.details.icon_offset,
-              local.details.icon_offset + local.details.icon_size, 'image/png'));
+            const start = local.details.icon_offset;
+            const end = start + local.details.icon_size;
+            const slice = local.file.slice(start, end, 'image/png');
+            local.iconUrl = URL.createObjectURL(slice);
           }
           local.eligibility = await checkUploadEligibility(local.details);
           if (filesRef.current.get(local.id) !== local) continue;
@@ -223,6 +228,110 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
   const filePending = useCallback((id) => enqueuingFiles.current.has(id) || latest.current.snapshot.jobs.some((job) =>
     job.file_key === id && job.source_id === owner.slice(0, 16) && pendingStates.has(job.state)), [owner]);
 
+  const addRemote = useCallback(async (url, mode = 'route') => {
+    const trimmed = (url || '').trim();
+    if (!trimmed) return false;
+    try {
+      if (mode === 'passthrough') {
+        const link = passthroughJobPath(trimmed);
+        if (remotesRef.current.has(link.path)) {
+          latest.current.showToast('That link is already listed', 'info');
+          return false;
+        }
+        remotesRef.current.set(link.path, {
+          id: link.path,
+          url: link.url,
+          path: link.path,
+          passthrough: true,
+          filename: link.filename,
+          fileSize: 0,
+          hasIcon: false,
+          status: 'ready',
+          details: {
+            title_id: '',
+            title_name: link.filename,
+            content_id: '',
+            app_version: '',
+            pkg_type: 'base',
+            sdk_version: 0,
+            file_size: 0,
+          },
+          eligibility: { can_install: true, install_disabled_reason: '', is_installed: false, installed_version: '' },
+        });
+        setRemotes(Array.from(remotesRef.current.values()));
+        return true;
+      }
+      const data = await probeRemotePackage(trimmed);
+      const key = data.url || trimmed;
+      if (remotesRef.current.has(key)) {
+        latest.current.showToast('That link is already listed', 'info');
+        return false;
+      }
+      remotesRef.current.set(key, {
+        id: key,
+        url: key,
+        filename: data.filename || 'package.pkg',
+        fileSize: Number(data.file_size) || 0,
+        hasIcon: Boolean(data.has_icon),
+        status: 'ready',
+        details: {
+          title_id: data.title_id || '',
+          title_name: data.title_name || data.filename || 'Package',
+          content_id: data.content_id || '',
+          app_version: data.app_version || '',
+          pkg_type: data.pkg_type || 'base',
+          sdk_version: Number(data.sdk_version) || 0,
+          file_size: Number(data.file_size) || 0,
+        },
+        eligibility: {
+          can_install: data.can_install !== false,
+          install_disabled_reason: data.install_disabled_reason || '',
+          is_installed: Boolean(data.is_installed),
+          installed_version: data.installed_version || '',
+        },
+      });
+      setRemotes(Array.from(remotesRef.current.values()));
+      return true;
+    } catch (e) {
+      latest.current.showToast(e.message || 'Could not read the remote package', 'error');
+      return false;
+    }
+  }, []);
+
+  const enqueueRemotes = useCallback(async (urls) => {
+    const selected = urls.map((url) => remotesRef.current.get(url)).filter(Boolean);
+    if (!selected.length) return null;
+    const addable = selected.filter((remote) => canQueueRemote(remote, latest.current.snapshot.jobs, selected));
+    if (addable.length < selected.length) {
+      const blocked = selected.find((remote) => !addable.includes(remote));
+      latest.current.showToast(`${selected.length - addable.length} package(s) cannot be queued: ${blocked?.eligibility?.install_disabled_reason || 'already installed or queued'}`, 'info');
+    }
+    if (!addable.length) return null;
+    return perform(async () => {
+      const ordered = orderBrowserFiles(addable);
+      const response = await enqueueJobs(ordered.map((remote) => packageJob({
+        path: remote.path || remote.url,
+        title_id: remote.details.title_id,
+        title_name: remote.details.title_name,
+        content_id: remote.details.content_id,
+        pkg_type: remote.details.pkg_type,
+        app_version: remote.details.app_version,
+        total_pkg_size: remote.fileSize,
+      })));
+      latest.current.showToast(`${response.ids.length} package${response.ids.length === 1 ? '' : 's'} added to install queue`, 'success');
+      return response;
+    });
+  }, [perform]);
+
+  const remotePending = useCallback((url) => latest.current.snapshot.jobs.some((job) =>
+    (job.path === url || job.path === `pass:${url}`) && !job.source_id && pendingStates.has(job.state)), []);
+
+  const removeRemote = useCallback((url) => {
+    if (remotePending(url)) return;
+    remotesRef.current.delete(url);
+    setRemotes(Array.from(remotesRef.current.values()));
+  }, [remotePending]);
+
   const removeFile = useCallback((id) => {
     if (filePending(id)) return;
     const local = filesRef.current.get(id);
@@ -253,7 +362,7 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
     return perform(() => cancelQueueJob(job.id));
   }, [perform]);
 
-  return { ...snapshot, connected, overview, files, skipped, uploadSpeed: upload.uploadSpeed, installSpeed: rate.current.speed, addFiles, removeFile, clearFiles, enqueueFiles, enqueuePackages,
+  return { ...snapshot, connected, overview, files, remotes, skipped, uploadSpeed: upload.uploadSpeed, installSpeed: rate.current.speed, addFiles, addRemote, removeFile, removeRemote, clearFiles, enqueueFiles, enqueueRemotes, enqueuePackages,
     cancel, retry,
     clearFinished: () => perform(clearFinishedJobs), refresh, sourceId: owner.slice(0, 16) };
 }

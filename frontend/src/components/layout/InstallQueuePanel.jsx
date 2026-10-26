@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import DebugSpeedOverlay from '../screens/DebugSpeedOverlay';
 import { formatBytes } from '../../utils/formatters';
-import { pendingStates, queueStateLabel, queuePrompt } from '../../utils/installQueue';
+import { pendingStates, queueStateLabel, queuePrompt, queueSourceLabel } from '../../utils/installQueue';
 import { iconUrlFor } from '../../BlurIcon';
 import PackageThumbnail from '../PackageThumbnail';
 
@@ -59,7 +59,7 @@ export default function InstallQueuePanel({ queue, onClose, debugEnabled = false
                     <span className="text-xs text-zinc-400 shrink-0 uppercase">{job.kind}</span>
                   </div>
                   <p className={`text-xs mt-1 ${['failed', 'blocked', 'aborted'].includes(job.state) ? 'text-amber-300' : 'text-blue-300'}`}>{stateLabel}</p>
-                  <p className="text-xs text-zinc-400 mt-1">{job.title_id} · {formatBytes(job.total_bytes)} · {job.source_id ? 'Browser' : job.path.startsWith('smb:') ? 'SMB' : 'USB / Disc'}</p>
+                  <p className="text-xs text-zinc-400 mt-1">{job.title_id} · {formatBytes(job.total_bytes)} · {queueSourceLabel(job)}</p>
                   {prompt && <p className="text-xs text-zinc-300 mt-2 break-words">{prompt}</p>}
                   {job.state === 'installing' && !job.is_direct_storage && !job.waiting_for_disc && (
                     <div className="mt-2 text-xs text-zinc-300">

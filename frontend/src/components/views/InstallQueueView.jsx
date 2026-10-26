@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import DebugSpeedOverlay from '../screens/DebugSpeedOverlay';
 import { formatBytes, formatEta } from '../../utils/formatters';
-import { pendingStates, terminalStates, queueStateLabel, queuePrompt } from '../../utils/installQueue';
+import { pendingStates, terminalStates, queueStateLabel, queuePrompt, queueSourceLabel } from '../../utils/installQueue';
 import { iconUrlFor } from '../../BlurIcon';
 import PackageThumbnail from '../PackageThumbnail';
 import { isPlayStation } from '../../constants/config';
@@ -177,7 +177,7 @@ export default function InstallQueueView({ queue, onBack, debugEnabled = false }
                 {heroJob.title_id ? `${heroJob.title_id} • ` : ''}
                 <span className="uppercase">{heroJob.kind}</span>
                 {` • ${formatBytes(heroJob.total_bytes)}`}
-                {` • ${heroJob.source_id ? 'Browser' : heroJob.path?.startsWith('smb:') ? 'SMB' : 'USB / Disc'}`}
+                {` • ${queueSourceLabel(heroJob)}`}
               </p>
 
               {/* Prompt or Error */}

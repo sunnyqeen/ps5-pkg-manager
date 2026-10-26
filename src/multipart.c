@@ -8,6 +8,7 @@
 #include "multipart.h"
 #include "miniz.h"
 #include "smb_client.h"
+#include "http_pkg.h"
 #include "installer.h"
 #include "ws_stream.h" /* NEW: live: scheme backend (additive; no SMB/file paths touched) */
 
@@ -96,7 +97,7 @@ int multipart_read_header(const char *file_path, multipart_header_t *out_hdr) {
         return -1;
     }
 
-    if (strncmp(file_path, "smb://", 6) == 0) {
+    if (strncmp(file_path, "smb://", 6) == 0 || http_pkg_is_url(file_path)) {
         return -1; /* Multi-part format is only supported on local drives (USB / optical discs) */
     }
 
@@ -428,6 +429,30 @@ int virtual_stream_open(const char *initial_path, virtual_stream_t *stream) {
         return 0;
     }
 
+    if (http_pkg_is_url(initial_path)) {
+        char err[160];
+        http_pkg_session_t *sess = NULL;
+        if (http_pkg_session_open(initial_path, &sess, err, sizeof(err)) != 0) {
+            install_log("[HTTP] %s", err[0] ? err : "Could not open remote package");
+            virtual_stream_close(stream);
+            return -1;
+        }
+        stream->is_multipart = 0;
+        stream->is_smb = 0;
+        stream->is_http = 1;
+        stream->http_session = sess;
+        stream->current_part = 1;
+        stream->total_parts = 1;
+        stream->total_pkg_size = http_pkg_session_size(sess);
+        strncpy(stream->parts[0].path, initial_path, sizeof(stream->parts[0].path) - 1);
+        stream->parts[0].start_pkg_offset = 0;
+        stream->parts[0].part_data_size = stream->total_pkg_size;
+        stream->parts[0].data_offset = 0;
+        stream->parts[0].fd = -1;
+        http_pkg_filename(initial_path, stream->pkg_filename, sizeof(stream->pkg_filename));
+        return 0;
+    }
+
     if (strncmp(initial_path, "smb://", 6) == 0) {
         smb_file_session_t *sess = smb_file_session_open(initial_path);
         if (!sess) {
@@ -622,6 +647,14 @@ ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void 
         return (ssize_t)n;
     }
 
+    if (stream->is_http && stream->http_session) {
+        size_t to_read = count;
+        if (pkg_offset + to_read > stream->total_pkg_size) {
+            to_read = (size_t)(stream->total_pkg_size - pkg_offset);
+        }
+        return http_pkg_session_read((http_pkg_session_t *)stream->http_session, buf, to_read, pkg_offset);
+    }
+
     if (stream->is_smb && stream->smb_session) {
         /* SMB sessions self-serialize via their own mutex; no stream
          * lock is taken here so slow network reads never stall the
@@ -797,6 +830,11 @@ void virtual_stream_close(virtual_stream_t *stream) {
         smb_file_session_close((smb_file_session_t *)stream->smb_session);
         stream->smb_session = NULL;
     }
+    if (stream->is_http && stream->http_session) {
+        http_pkg_session_close((http_pkg_session_t *)stream->http_session);
+        stream->http_session = NULL;
+        stream->is_http = 0;
+    }
     for (uint32_t i = 0; i < stream->total_parts && i < MAX_MULTIPART_PARTS; i++) {
         if (stream->parts[i].fd >= 0) {
             close(stream->parts[i].fd);
@@ -815,6 +853,12 @@ const char *virtual_stream_get_smb_url(const virtual_stream_t *stream) {
     return stream->parts[0].path;
 }
 
+const char *virtual_stream_get_http_url(const virtual_stream_t *stream) {
+    if (!stream || !stream->is_http) return NULL;
+    if (stream->parts[0].path[0] == '\0') return NULL;
+    return stream->parts[0].path;
+}
+
 int virtual_stream_check_path(const char *path) {
     if (!path || path[0] == '\0') return -1;
     if (strncmp(path, "live:", 5) == 0) {
@@ -824,6 +868,12 @@ int virtual_stream_check_path(const char *path) {
         smb_file_session_t *sess = smb_file_session_open(path);
         if (!sess) return -1;
         smb_file_session_close(sess);
+        return 0;
+    }
+    if (http_pkg_is_url(path)) {
+        http_pkg_session_t *sess = NULL;
+        if (http_pkg_session_open(path, &sess, NULL, 0) != 0) return -1;
+        http_pkg_session_close(sess);
         return 0;
     }
     const char *local_path = (strncmp(path, "file://", 7) == 0) ? path + 7 : path;

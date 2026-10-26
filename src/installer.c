@@ -18,6 +18,7 @@
 #include "pkg_cache.h"
 #include "ws_stream.h" /* NEW: live RAM sessions (additive; worker below unchanged) */
 #include "ws_upload.h"
+#include "http_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -792,10 +793,24 @@ static int check_package_verified_installed(const char *title_id, const char *ki
 }
 #endif
 
+int installer_passthrough_url(const char *path, char *out, size_t out_sz) {
+    const char *url;
+    if (!path || strncmp(path, "pass:", 5) != 0) return 0;
+    url = path + 5;
+    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) return -1;
+    if (!url[0] || strchr(url, ' ') || strchr(url, '\t') || strchr(url, '\r') || strchr(url, '\n')) return -1;
+    if (out) {
+        if (out_sz == 0 || strlen(url) >= out_sz) return -1;
+        snprintf(out, out_sz, "%s", url);
+    }
+    return 1;
+}
+
 static int is_usb_or_disc_path(const char *path) {
     if (!path || path[0] == '\0') return 0;
     if (strncmp(path, "smb://", 6) == 0) return 0;
     if (strncmp(path, "live:", 5) == 0) return 0;
+    if (http_pkg_is_url(path)) return 0;
 
     const char *usb_prefix = getenv("PKG_USB_PREFIX");
     if (usb_prefix && usb_prefix[0] != '\0') {
@@ -1014,8 +1029,14 @@ static void *stream_installer_worker(void *arg) {
 
     int is_filesystem_install = 0;
     int can_fallback_to_direct = is_usb_or_disc_path(worker_pkg_path) && !worker_is_multipart;
+    char passthrough_url[512];
+    int is_passthrough = installer_passthrough_url(worker_pkg_path, passthrough_url, sizeof(passthrough_url)) == 1;
 
-    if (can_fallback_to_direct && !installer_is_network_connected()) {
+    if (is_passthrough) {
+        install_log("[INSTALLER] Passthrough install, no stream: %s", passthrough_url);
+        is_filesystem_install = 1;
+        can_fallback_to_direct = 0;
+    } else if (can_fallback_to_direct && !installer_is_network_connected()) {
         install_log("[INSTALLER] Network not connected; using direct storage install for %s", worker_pkg_path);
         is_filesystem_install = 1;
         can_fallback_to_direct = 0;
@@ -1204,7 +1225,10 @@ static void *stream_installer_worker(void *arg) {
     if (tid[0] == '\0' && hdr1.title_id[0] != '\0') {
         strncpy(tid, hdr1.title_id, sizeof(tid) - 1);
     }
-    if (is_filesystem_install) {
+    if (is_passthrough) {
+        snprintf(target_uri, sizeof(target_uri), "%s", passthrough_url);
+        icon_uri[0] = '\0';
+    } else if (is_filesystem_install) {
         snprintf(target_uri, sizeof(target_uri), "%s", worker_pkg_path);
         icon_uri[0] = '\0';
     } else {
@@ -1242,7 +1266,14 @@ static void *stream_installer_worker(void *arg) {
         return NULL;
     }
     g_status.waiting_for_disc = 0;
-    if (is_filesystem_install) {
+    if (is_passthrough) {
+        g_status.is_direct_storage = 1;
+        g_status.downloaded_bytes = 0;
+        g_status.progress_percent = -1.0f;
+        strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                 "Passed the link to the PS5 installer. Track progress in the home menu.");
+    } else if (is_filesystem_install) {
         g_status.is_direct_storage = 1;
         g_status.downloaded_bytes = 0;
         g_status.progress_percent = -1.0f;
@@ -1263,11 +1294,13 @@ static void *stream_installer_worker(void *arg) {
     }
     pthread_mutex_unlock(&g_installer_mutex);
 
-    if (is_filesystem_install) {
+    if (is_passthrough) {
+        ps5_notify("Passed the link to the PS5 installer.");
+    } else if (is_filesystem_install) {
         ps5_notify("Direct storage install started. Track progress in PS5 menu.");
     }
 
-    if (is_filesystem_install && worker_pkg_path[0] != '\0') {
+    if (is_filesystem_install && !is_passthrough && worker_pkg_path[0] != '\0') {
         pthread_mutex_lock(&g_installer_mutex);
         if (g_status.total_bytes == 0) {
             struct stat pkg_st;
@@ -1278,7 +1311,10 @@ static void *stream_installer_worker(void *arg) {
         pthread_mutex_unlock(&g_installer_mutex);
     }
 
-    if (is_filesystem_install) {
+    if (is_passthrough) {
+        install_log("[INSTALLER] Initiating passthrough install: URI='%s', name='%s'",
+                    target_uri, disp_name);
+    } else if (is_filesystem_install) {
         install_log("[INSTALLER] Initiating direct filesystem install: path='%s', name='%s', total_bytes=%llu",
                     target_uri, disp_name, (unsigned long long)g_status.total_bytes);
     } else {
@@ -1909,18 +1945,38 @@ static int installer_start_internal(const char *pkg_path) {
     }
 
     char pkg_path_copy[512];
+    char pass_url[512];
+    int pass_rc;
     strncpy(pkg_path_copy, pkg_path, sizeof(pkg_path_copy) - 1);
     pkg_path_copy[sizeof(pkg_path_copy) - 1] = '\0';
+    pass_rc = installer_passthrough_url(pkg_path_copy, pass_url, sizeof(pass_url));
+    if (pass_rc < 0) {
+        install_log("[INSTALLER] Passthrough link is not an http:// or https:// URL");
+        return -1;
+    }
 
     /* Verify that the package file exists and is accessible before proceeding */
-    if (virtual_stream_check_path(pkg_path_copy) != 0) {
+    if (pass_rc == 0 && virtual_stream_check_path(pkg_path_copy) != 0) {
         install_log("[INSTALLER] Package file does not exist or cannot be opened: %s", pkg_path_copy);
         ps5_notify("Package file not found!");
         return -4; /* File not found */
     }
 
     pkg_detail_t detail;
-    if (pkg_parser_parse(pkg_path_copy, &detail) != 0) {
+    if (pass_rc == 1) {
+        const char *slash = strrchr(pass_url, '/');
+        const char *name = (slash && slash[1]) ? slash + 1 : "package.pkg";
+        char *query;
+        memset(&detail, 0, sizeof(detail));
+        snprintf(detail.path, sizeof(detail.path), "%s", pkg_path_copy);
+        snprintf(detail.filename, sizeof(detail.filename), "%s", name);
+        query = strchr(detail.filename, '?');
+        if (query) *query = '\0';
+        if (!detail.filename[0]) snprintf(detail.filename, sizeof(detail.filename), "package.pkg");
+        snprintf(detail.title_name, sizeof(detail.title_name), "%s", detail.filename);
+        snprintf(detail.pkg_type_str, sizeof(detail.pkg_type_str), "base");
+        detail.pkg_type = PKG_TYPE_BASE;
+    } else if (pkg_parser_parse(pkg_path_copy, &detail) != 0) {
         /* Fallback: populate basic info so installation can still proceed via sceAppInstUtil */
         memset(&detail, 0, sizeof(detail));
         strncpy(detail.path, pkg_path_copy, sizeof(detail.path) - 1);
@@ -1935,8 +1991,8 @@ static int installer_start_internal(const char *pkg_path) {
         }
         strncpy(detail.title_id, "UNKNOWN", sizeof(detail.title_id) - 1);
         strncpy(detail.title_name, "Package", sizeof(detail.title_name) - 1);
-        /* smb:// paths have no local stat; leave sizes 0 (worker streams). */
-        if (strncmp(pkg_path_copy, "smb://", 6) != 0) {
+        /* Remote paths have no local stat; leave sizes 0 (worker streams). */
+        if (strncmp(pkg_path_copy, "smb://", 6) != 0 && !http_pkg_is_url(pkg_path_copy)) {
             struct stat st;
             if (stat(pkg_path_copy, &st) == 0) {
                 detail.file_size = (uint64_t)st.st_size;
@@ -1946,7 +2002,7 @@ static int installer_start_internal(const char *pkg_path) {
 
     /* Multi-part packages are only supported on local drives (USB / optical discs) */
     if ((detail.is_multipart || strstr(pkg_path_copy, ".part") != NULL || strstr(pkg_path_copy, ".pkg.part") != NULL) &&
-        strncmp(pkg_path_copy, "smb://", 6) == 0) {
+        (strncmp(pkg_path_copy, "smb://", 6) == 0 || http_pkg_is_url(pkg_path_copy))) {
         ps5_notify("Multi-part packages are only supported on USB/Disc!");
         return -13;
     }
@@ -1998,7 +2054,13 @@ static int installer_start_internal(const char *pkg_path) {
                          strstr(pkg_path_copy, "/disc") != NULL ||
                          strstr(pkg_path_copy, "_disc") != NULL);
     int is_offline_direct = is_usb_or_disc_path(pkg_path_copy) && !detail.is_multipart && !installer_is_network_connected();
-    if (is_offline_direct) {
+    if (pass_rc == 1) {
+        g_status.is_direct_storage = 1;
+        g_status.progress_percent = -1.0f;
+        strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                 "Passed the link to the PS5 installer. Track progress in the home menu.");
+    } else if (is_offline_direct) {
         g_status.is_direct_storage = 1;
         g_status.progress_percent = -1.0f;
         strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);

@@ -22,6 +22,7 @@
 #include "app_installer.h"
 #include "ws_upload.h"
 #include "ws_stream.h"
+#include "http_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -517,6 +518,84 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             add_cors_headers(resp);
             MHD_add_response_header(resp, "Content-Type", "application/json");
             enum MHD_Result ret = MHD_queue_response(conn, ok ? MHD_HTTP_OK : MHD_HTTP_CONFLICT, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
+        /* POST /api/upload/remote {"url":"http://host/game.pkg"}
+         * Reads package metadata from a remote HTTP server. The console
+         * downloads the package later, when the link is queued. */
+        if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/remote") == 0) {
+            post_state_t *ps = (post_state_t *)*con_cls;
+            char link[600] = {0};
+            char err[160] = {0};
+            pkg_detail_t pkg;
+            char *response = NULL;
+            unsigned int code = MHD_HTTP_OK;
+            if (!ps || !ps->data || extract_json_string_value(ps->data, "url", link, sizeof(link)) != 0 || !link[0]) {
+                code = MHD_HTTP_BAD_REQUEST;
+                response = strdup("{\"success\":false,\"error\":\"Enter an http:// link\"}");
+            } else if (strlen(link) >= HTTP_PKG_URL_MAX) {
+                code = MHD_HTTP_BAD_REQUEST;
+                response = strdup("{\"success\":false,\"error\":\"That link is too long\"}");
+            } else if (http_pkg_inspect(link, &pkg, err, sizeof(err)) != 0) {
+                char escaped[256];
+                code = MHD_HTTP_BAD_REQUEST;
+                json_str_esc(err[0] ? err : "Could not read the remote package", escaped, sizeof(escaped));
+                response = (char *)malloc(512);
+                if (response) snprintf(response, 512, "{\"success\":false,\"error\":\"%s\"}", escaped);
+            } else {
+                pkg_install_eligibility_t eligibility;
+                char canon[HTTP_PKG_URL_MAX], filename[256];
+                char e_url[1200], e_name[600], e_title[1600], e_tid[128], e_cid[256];
+                char e_ver[128], e_type[64], e_reason[600], e_installed[96];
+                pkg_scanner_check_install_eligibility(&pkg, &eligibility);
+                snprintf(canon, sizeof(canon), "%s", pkg.path);
+                http_pkg_filename(canon, filename, sizeof(filename));
+                json_str_esc(canon, e_url, sizeof(e_url));
+                json_str_esc(filename, e_name, sizeof(e_name));
+                json_str_esc(pkg.title_name, e_title, sizeof(e_title));
+                json_str_esc(pkg.title_id, e_tid, sizeof(e_tid));
+                json_str_esc(pkg.content_id, e_cid, sizeof(e_cid));
+                json_str_esc(pkg.app_version, e_ver, sizeof(e_ver));
+                json_str_esc(pkg.pkg_type_str, e_type, sizeof(e_type));
+                json_str_esc(eligibility.disabled_reason, e_reason, sizeof(e_reason));
+                json_str_esc(eligibility.installed_version, e_installed, sizeof(e_installed));
+                response = (char *)malloc(8192);
+                if (response) {
+                    int n = snprintf(response, 8192,
+                        "{\"success\":true,\"url\":\"%s\",\"filename\":\"%s\","
+                        "\"title_name\":\"%s\",\"title_id\":\"%s\",\"content_id\":\"%s\","
+                        "\"app_version\":\"%s\",\"pkg_type\":\"%s\","
+                        "\"file_size\":%llu,\"total_pkg_size\":%llu,\"sdk_version\":%u,"
+                        "\"has_icon\":%s,\"can_install\":%s,\"install_disabled_reason\":\"%s\","
+                        "\"is_installed\":%s,\"installed_version\":\"%s\"}",
+                        e_url, e_name, e_title, e_tid, e_cid, e_ver, e_type,
+                        (unsigned long long)pkg.file_size, (unsigned long long)pkg.total_pkg_size,
+                        pkg.sdk_version, pkg.has_icon ? "true" : "false",
+                        eligibility.can_install ? "true" : "false", e_reason,
+                        eligibility.is_installed ? "true" : "false", e_installed);
+                    if (n < 0 || n >= 8192) {
+                        free(response);
+                        response = strdup("{\"success\":false,\"error\":\"Could not describe the remote package\"}");
+                        code = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                    }
+                }
+            }
+            if (!response) {
+                static const char fallback[] = "{\"success\":false,\"error\":\"Could not read the remote package\"}";
+                struct MHD_Response *resp = MHD_create_response_from_buffer(
+                    sizeof(fallback) - 1, (void *)fallback, MHD_RESPMEM_PERSISTENT);
+                add_cors_headers(resp);
+                MHD_add_response_header(resp, "Content-Type", "application/json");
+                enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+                MHD_destroy_response(resp);
+                return ret;
+            }
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                strlen(response), response, MHD_RESPMEM_MUST_FREE);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, code, resp);
             MHD_destroy_response(resp);
             return ret;
         }

@@ -5,6 +5,7 @@
 #include "pkg_scanner.h"
 #include "app_info.h"
 #include "ws_upload.h"
+#include "http_pkg.h"
 #include "sqlite3.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -518,9 +519,11 @@ static void tick(void) {
 
     pkg_detail_t pkg;
     package_from_request(&snapshot.request, &pkg);
-    int parse_rc = snapshot.request.owner[0] ? 0 : pkg_parser_parse(snapshot.request.path, &pkg);
+    int passthrough = installer_passthrough_url(snapshot.request.path, NULL, 0) == 1;
+    int parse_rc = snapshot.request.owner[0] || passthrough ? 0 : pkg_parser_parse(snapshot.request.path, &pkg);
     pkg_install_eligibility_t eligibility = {0};
-    if (!parse_rc) pkg_scanner_check_install_eligibility(&pkg, &eligibility);
+    if (passthrough) eligibility.can_install = 1;
+    else if (!parse_rc) pkg_scanner_check_install_eligibility(&pkg, &eligibility);
     int installed = !parse_rc && app_info_check_installed(pkg.title_id, NULL, 0);
     int offline = !snapshot.request.owner[0] && !installer_is_network_connected();
     pthread_mutex_lock(&dispatch);
@@ -547,7 +550,9 @@ static void tick(void) {
     if (parse_rc || missing_base || (!eligibility.can_install && !(base_ready && base_reason))) {
         active->state = parse_rc ? QUEUE_FAILED :
                         snapshot.request.owner[0] ? QUEUE_ABORTED : QUEUE_CANCELED;
-        snprintf(active->error, sizeof(active->error), "%s", parse_rc ? "Package source unavailable or unreadable. Reconnect the drive/share and retry." :
+        snprintf(active->error, sizeof(active->error), "%s", parse_rc ? (http_pkg_is_url(snapshot.request.path) ?
+                 "Could not read the remote package. Check the link and retry." :
+                 "Package source unavailable or unreadable. Reconnect the drive/share and retry.") :
                  missing_base ? "Base is not installed or queued before this package" : eligibility.disabled_reason);
         if (!pending(active->state)) active->finished = time(NULL);
         active_id = 0;
@@ -564,7 +569,9 @@ static void tick(void) {
     if (active && !snapshot.request.owner[0]) {
         active->state = rc == 0 ? QUEUE_INSTALLING : QUEUE_FAILED;
         if (rc) {
-            const char *message = rc == -4 ? "Package source unavailable. Reconnect the drive/share and retry." :
+            const char *message = rc == -4 ? (http_pkg_is_url(snapshot.request.path) ?
+                "Could not read the remote package. Check the link and retry." :
+                "Package source unavailable. Reconnect the drive/share and retry.") :
                 rc == -10 ? "Insufficient installation storage space" : rc == -11 ? "Could not create staging directory" : "Could not start installation";
             snprintf(active->error, sizeof(active->error), "%s (code %d)", message, rc);
             active->finished = time(NULL);

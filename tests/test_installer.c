@@ -311,6 +311,17 @@ int main(void) {
     assert(installer_is_filesystem_install("/mnt/usb0/game.pkg.part1", 1) == 0);
     assert(installer_is_filesystem_install("/mnt/disc/game.pkg.part1", 1) == 0);
     assert(installer_is_filesystem_install("smb://192.168.1.10/share/game.pkg", 0) == 0);
+    assert(installer_is_filesystem_install("http://192.168.1.10/game.pkg", 0) == 0);
+    assert(installer_is_filesystem_install("https://cdn.example/game.pkg", 0) == 0);
+    {
+        char passed[512];
+        assert(installer_passthrough_url("http://192.168.1.10/game.pkg", passed, sizeof(passed)) == 0);
+        assert(installer_passthrough_url("pass:http://192.168.1.10/game.pkg", passed, sizeof(passed)) == 1);
+        assert(strcmp(passed, "http://192.168.1.10/game.pkg") == 0);
+        assert(installer_passthrough_url("pass:https://cdn.example/game.pkg", passed, sizeof(passed)) == 1);
+        assert(installer_passthrough_url("pass:ftp://cdn.example/game.pkg", passed, sizeof(passed)) == -1);
+        assert(installer_is_filesystem_install("pass:http://192.168.1.10/game.pkg", 0) == 0);
+    }
     assert(installer_is_filesystem_install("live:session123", 0) == 0);
     assert(installer_is_filesystem_install(NULL, 0) == 0);
     assert(installer_is_filesystem_install("", 0) == 0);

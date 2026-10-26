@@ -8,6 +8,7 @@
 #include "pkg_parser.h"
 #include "multipart.h"
 #include "smb_client.h"
+#include "http_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -837,6 +838,9 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     if (strncmp(file_path, "smb://", 6) == 0) {
         return smb_client_parse_pkg(file_path, out);
     }
+    if (http_pkg_is_url(file_path)) {
+        return http_pkg_parse_pkg(file_path, out);
+    }
 
     memset(out, 0, sizeof(*out));
     strncpy(out->path, file_path, sizeof(out->path) - 1);
@@ -1655,6 +1659,21 @@ int pkg_parser_get_icon(const char *file_path, uint64_t offset, uint32_t size,
             free(buf);
         }
         return smb_client_get_icon(file_path, out_data, out_size);
+    }
+
+    if (http_pkg_is_url(file_path)) {
+        if (offset > 0 && size > 0 && size < 10 * 1024 * 1024) {
+            uint8_t *buf = (uint8_t *)malloc(size);
+            if (!buf) return -1;
+            ssize_t n = http_pkg_pread(file_path, buf, size, offset);
+            if (n == (ssize_t)size) {
+                *out_data = buf;
+                *out_size = size;
+                return 0;
+            }
+            free(buf);
+        }
+        return http_pkg_get_icon(file_path, out_data, out_size);
     }
 
     if (offset == 0 || size == 0 || size >= 10 * 1024 * 1024) {

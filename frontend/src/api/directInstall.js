@@ -77,6 +77,19 @@ export function cancelUploadOnUnload(owner, sessionId) {
   }
 }
 
+export async function probeRemotePackage(url) {
+  const res = await fetch('/api/upload/remote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) {
+    throw new Error((data && data.error) || 'Could not read the remote package');
+  }
+  return data;
+}
+
 export function wsUploadUrl(wsPort) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   // The Vite dev server proxies /ws/upload to the backend (vite.config.js).

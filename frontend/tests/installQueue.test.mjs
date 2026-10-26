@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { canQueuePackage, canQueueBrowserFile, queueOverview, orderBrowserFiles } from '../src/utils/installQueue.js';
+import { canQueuePackage, canQueueBrowserFile, canQueueRemote, queueSourceLabel, queueOverview, orderBrowserFiles } from '../src/utils/installQueue.js';
 import { makeTextProgressBar, formatInstallTitle, getBrowserTitle } from '../src/utils/title.js';
 
 const require = createRequire(import.meta.url);
@@ -178,6 +178,28 @@ test('direct packages remain separate cards with local thumbnails and platform/t
   assert.match(html, />PS5<\/span>/);
   assert.match(html, />update<\/span>/);
   assert.match(html, />dlc<\/span>/);
+});
+
+test('Direct Install accepts a remote http link alongside local packages', () => {
+  const remote = { id: 'http://nas.local/game.pkg', url: 'http://nas.local/game.pkg', filename: 'game.pkg', fileSize: 2048,
+    hasIcon: false, status: 'ready', details: { title_name: 'Remote Link Package', title_id: 'PPSA01990', pkg_type: 'base', app_version: '01.000.000' },
+    eligibility: { can_install: true, install_disabled_reason: '' } };
+  assert.equal(canQueueRemote(remote, []), true);
+  assert.equal(canQueueRemote(remote, [job(1, 'queued', { path: remote.url, source_id: '' })]), false);
+  assert.equal(queueSourceLabel({ path: remote.url }), 'Route');
+  assert.equal(queueSourceLabel({ path: 'pass:http://nas.local/game.pkg' }), 'Passthrough');
+  assert.equal(queueSourceLabel({ path: '/mnt/usb0/game.pkg' }), 'USB / Disc');
+  const html = render(Direct, { queue: { ...queue([]), sourceId: 'browser', skipped: [], files: [], remotes: [remote] } });
+  assert.match(html, /id="remote-pkg-link"/);
+  assert.match(html, /aria-label="Link install method"/);
+  assert.match(html, /aria-checked="true"[^>]*>Route<\/button>/);
+  assert.match(html, />Passthrough<\/button>/);
+  assert.match(html, /placeholder="http:\/\/192.168.1.20:8080\/game.pkg"/);
+  assert.match(html, />Add link<\/button>/);
+  assert.match(html, /Route · Ready/);
+  assert.match(html, /Remote Link Package/);
+  assert.match(html, /http:\/\/nas.local\/game.pkg/);
+  assert.match(html, />Install all \(1\)<\/button>/);
 });
 
 test('Direct Install provides Choose packages and Install all actions without Choose folder or Clear files', () => {

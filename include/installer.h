@@ -4,6 +4,7 @@
 /* Up to 1 MiB of recent history for /api/log (2,048 lines x 512 bytes). */
 #define INSTALL_LOG_MAX_LINES 2048
 
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 #include "pkg_parser.h"
@@ -42,6 +43,10 @@ extern "C" {
 
 int installer_init(const char *server_url);
 int installer_start(const char *pkg_path);
+/* pass:http(s)://... hands that URL to the system installer with no stream.
+ * Returns 1 and copies the URL, 0 when path is not passthrough, -1 when the
+ * prefix is present but the URL is not http:// or https://. */
+int installer_passthrough_url(const char *path, char *out, size_t out_sz);
 /* Compatibility entry point: adds two independent jobs to the shared queue. */
 int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path);
 /* NEW: start from a live RAM session ("live:<id>"); see installer.c. */
