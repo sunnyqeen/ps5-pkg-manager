@@ -97,4 +97,5 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file release-notes.md \
+            --target ${{ github.ref_name }} \
             "pkg-manager_v${VERSION}.elf"

@@ -1,4 +1,6 @@
 # Changelog
+## v1.5.1.1
+- Added support for installation via http link
 
 ## v1.5.1
 
