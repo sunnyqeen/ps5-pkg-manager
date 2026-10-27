@@ -254,12 +254,16 @@ int main(void) {
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/go", srv.port);
     assert(http_pkg_parse_pkg(url, &remote) == 0);
     assert(strcmp(remote.title_id, "PPSA90012") == 0);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/pkg", srv.port);
+    assert(strcmp(remote.path, url) == 0);
     serve_stop(&srv);
 
     assert(serve_start(&srv, data, len, 3) == 0);
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/dir/HttpGame.pkg", srv.port);
     assert(http_pkg_parse_pkg(url, &remote) == 0);
     assert(strcmp(remote.title_id, "PPSA90012") == 0);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/dir/HttpGame.pkg?ok=1", srv.port);
+    assert(strcmp(remote.path, url) == 0);
     serve_stop(&srv);
 
     assert(serve_start(&srv, data, len, 1) == 0);

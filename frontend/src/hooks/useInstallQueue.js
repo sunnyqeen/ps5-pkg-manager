@@ -232,44 +232,19 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
     const trimmed = (url || '').trim();
     if (!trimmed) return false;
     try {
-      if (mode === 'passthrough') {
-        const link = passthroughJobPath(trimmed);
-        if (remotesRef.current.has(link.path)) {
-          latest.current.showToast('That link is already listed', 'info');
-          return false;
-        }
-        remotesRef.current.set(link.path, {
-          id: link.path,
-          url: link.url,
-          path: link.path,
-          passthrough: true,
-          filename: link.filename,
-          fileSize: 0,
-          hasIcon: false,
-          status: 'ready',
-          details: {
-            title_id: '',
-            title_name: link.filename,
-            content_id: '',
-            app_version: '',
-            pkg_type: 'base',
-            sdk_version: 0,
-            file_size: 0,
-          },
-          eligibility: { can_install: true, install_disabled_reason: '', is_installed: false, installed_version: '' },
-        });
-        setRemotes(Array.from(remotesRef.current.values()));
-        return true;
-      }
-      const data = await probeRemotePackage(trimmed);
-      const key = data.url || trimmed;
-      if (remotesRef.current.has(key)) {
+      const passthrough = mode === 'passthrough';
+      const probeUrl = passthrough ? passthroughJobPath(trimmed).url : trimmed;
+      const data = await probeRemotePackage(probeUrl);
+      const storedUrl = data.url || probeUrl;
+      const storedPath = passthrough ? passthroughJobPath(storedUrl).path : storedUrl;
+      if (remotesRef.current.has(storedPath)) {
         latest.current.showToast('That link is already listed', 'info');
         return false;
       }
-      remotesRef.current.set(key, {
-        id: key,
-        url: key,
+      remotesRef.current.set(storedPath, {
+        id: storedPath,
+        url: storedUrl,
+        ...(passthrough ? { path: storedPath, passthrough: true } : {}),
         filename: data.filename || 'package.pkg',
         fileSize: Number(data.file_size) || 0,
         hasIcon: Boolean(data.has_icon),

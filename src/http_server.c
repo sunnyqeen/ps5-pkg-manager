@@ -522,8 +522,10 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return ret;
         }
         /* POST /api/upload/remote {"url":"http://host/game.pkg"}
-         * Reads package metadata from a remote HTTP server. The console
-         * downloads the package later, when the link is queued. */
+         * Reads the package header through http_pkg for Route and Passthrough.
+         * The returned url is the link after redirects. Route streams that
+         * link later. Passthrough hands it to the PS5 installer, which does
+         * not follow redirects itself. */
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/remote") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;
             char link[600] = {0};
@@ -783,6 +785,10 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     /* ── GET /api/icon ─────────────────────────────────────────── */
     if (strcmp(method, "GET") == 0 && strcmp(url, "/api/icon") == 0) {
         const char *pkg_path = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "path");
+        char passthrough_url[HTTP_PKG_URL_MAX];
+        if (pkg_path && installer_passthrough_url(pkg_path, passthrough_url, sizeof(passthrough_url)) == 1) {
+            pkg_path = passthrough_url;
+        }
         if (pkg_path && strncmp(pkg_path, "live:", 5) == 0) {
             uint8_t *icon_data = NULL;
             size_t icon_size = 0;

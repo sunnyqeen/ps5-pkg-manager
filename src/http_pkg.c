@@ -1247,7 +1247,10 @@ int http_pkg_inspect(const char *url, pkg_detail_t *out, char *err, size_t err_s
         install_log("[HTTP] remote package %.160s: %s", canon, err && err[0] ? err : "open failed");
         return -1;
     }
-    rc = parse_session(session, canon, out);
+    /* session->url is the link that returned the package bytes. Redirects
+     * are already followed. Passthrough must queue this link: the PS5
+     * installer does not follow redirects itself. */
+    rc = parse_session(session, session->url, out);
     http_pkg_session_close(session);
     if (rc != 0) {
         set_err(err, err_sz, "Could not read package metadata from that link");

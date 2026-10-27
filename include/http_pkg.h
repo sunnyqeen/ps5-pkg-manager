@@ -32,7 +32,7 @@ void http_pkg_session_close(http_pkg_session_t *session);
 /* One-shot range read. Returns the byte count, or -1. */
 ssize_t http_pkg_pread(const char *url, void *buf, size_t count, uint64_t offset);
 
-/* Random-access PKG parse. out->path is the canonical link. */
+/* Random-access PKG parse. out->path is the link after redirects. */
 int http_pkg_parse_pkg(const char *url, pkg_detail_t *out);
 
 /* Parse plus a user-facing error. */
