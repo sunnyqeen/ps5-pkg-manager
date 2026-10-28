@@ -49,7 +49,9 @@ static void evaluate_install_eligibility(const pkg_detail_t *pkg, int is_install
             }
         }
     } else if (pkg->pkg_type == PKG_TYPE_UPDATE || pkg->pkg_type == PKG_TYPE_DLC) {
-        if (!out->is_installed) {
+        if (!out->is_installed && pkg->pkg_type == PKG_TYPE_UPDATE) {
+            //alow merged base with update
+        } else if (!out->is_installed) {
             out->can_install = 0;
             out->disabled_reason = partial
                 ? "Base package installation was aborted. Reinstall base package first."
