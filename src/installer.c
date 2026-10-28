@@ -817,6 +817,7 @@ static int is_usb_or_disc_path(const char *path) {
         if (strncmp(path, usb_prefix, strlen(usb_prefix)) == 0) return 1;
     }
     if (strncmp(path, "/mnt/usb", 8) == 0) return 1;
+    if (strncmp(path, "/data/mockusb", 13) == 0) return 1;
 
     const char *disc_dir = getenv("PKG_DISC_DIR");
     if (disc_dir && disc_dir[0] != '\0') {

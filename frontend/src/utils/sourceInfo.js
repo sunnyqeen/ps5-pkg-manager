@@ -12,6 +12,14 @@ export function getSourceInfo(pkgPath, drivesList = []) {
     };
   }
 
+  if (/^\/data\/mockusb(\/|$)/i.test(pkgPath)) {
+    return {
+      id: 'usb8',
+      name: 'MockUSB',
+      type: 'usb'
+    };
+  }
+
   // Check Disc: /mnt/disc
   if (pkgPath.match(/^\/mnt\/disc/i)) {
     return {

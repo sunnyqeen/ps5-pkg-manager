@@ -762,6 +762,8 @@ static int is_drive_mounted(const char *path) {
         return 1;
     }
 
+    if (strcmp(path, "/data/mockusb") == 0) return 1;
+
     struct statfs sfs;
     if (statfs(path, &sfs) == 0) {
         /* When a drive is actually mounted, sfs.f_mntonname matches path */
@@ -1109,9 +1111,13 @@ static int scan_full_owned(void) {
     } else {
         const char *usb_prefix = getenv("PKG_USB_PREFIX");
         if (!usb_prefix || usb_prefix[0] == '\0') usb_prefix = "/mnt/usb";
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
             char usb_path[64];
-            snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            if (i < 8) {
+                snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            } else {
+                snprintf(usb_path, sizeof(usb_path), "/data/mockusb");
+            }
             if (is_drive_mounted(usb_path)) {
                 total_expected += count_pkg_files(usb_path, 0, 0);
                 char usb_pkg_dir[128];
@@ -1169,9 +1175,13 @@ static int scan_full_owned(void) {
         if (!usb_prefix || usb_prefix[0] == '\0') usb_prefix = "/mnt/usb";
 
         /* 1. Check mounted USB drives /mnt/usb[0-7] */
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
             char usb_path[64];
-            snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            if (i < 8) {
+                snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            } else {
+                snprintf(usb_path, sizeof(usb_path), "/data/mockusb");
+            }
 
             if (is_drive_mounted(usb_path)) {
                 size_t prev_pkg = g_package_count;
@@ -1724,11 +1734,15 @@ int pkg_scanner_scan_quick(const char *drive_id_or_path, int *out_changed) {
         const char *usb_prefix = getenv("PKG_USB_PREFIX");
         if (!usb_prefix || usb_prefix[0] == '\0') usb_prefix = "/mnt/usb";
 
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
             char usb_id[32], usb_label[64], usb_path[64];
             snprintf(usb_id, sizeof(usb_id), "usb%d", i);
             snprintf(usb_label, sizeof(usb_label), "USB Drive %d", i);
-            snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            if (i < 8) {
+                snprintf(usb_path, sizeof(usb_path), "%s%d", usb_prefix, i);
+            } else {
+                snprintf(usb_path, sizeof(usb_path), "/data/mockusb");
+            }
 
             if (!drive_id_or_path || drive_id_or_path[0] == '\0' || strcmp(drive_id_or_path, "__all__") == 0 ||
                 strcmp(drive_id_or_path, usb_id) == 0 || strcmp(drive_id_or_path, usb_path) == 0) {
@@ -1953,9 +1967,14 @@ int pkg_scanner_find_part_ex(const uint8_t *package_uuid, const char *pkg_filena
         return 0;
     }
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         char usb_path[64];
-        snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
+        if (i < 8) {
+            snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
+        } else {
+            snprintf(usb_path, sizeof(usb_path), "/data/mockusb");
+        }
+
         if (is_drive_mounted(usb_path)) {
             if (scan_find_part_in_location(usb_path, package_uuid, pkg_filename, part_index, out_path, out_max, out_detected_part) == 0) {
                 return 0;
