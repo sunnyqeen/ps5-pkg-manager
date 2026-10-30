@@ -10,6 +10,7 @@
 #include "multipart.h"
 #include "installer.h"
 #include "meta_cache.h"
+#include "sevenzip.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -50,6 +51,10 @@ struct http_pkg_session {
     int ipv6;
     int https;
     uint64_t size;
+    uint64_t base; /* start of the embedded pkg inside a .7z archive */
+    uint64_t view; /* size of the embedded pkg, 0 when the whole file is the pkg */
+    uint32_t pkg_index;
+    int is_7z;
     int fd;
     int conn_id;
     pthread_mutex_t lock;
@@ -966,9 +971,61 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
     return fetch_range_ex(s, start, end, body, body_len, NULL, NULL, err, err_sz);
 }
 
+/* For a .7z path, removes the pkg_index, offset and size query parameters from the request
+ * target and canonical URL. offset/size are a hint written by a previous parse so the
+ * archive header need not be read again. Returns 1 for a .7z url, 0 otherwise. */
+static int strip_pkg_index(http_pkg_session_t *s, uint32_t *index, uint64_t *hint_off, uint64_t *hint_size) {
+    char *q = strchr(s->target, '?');
+    size_t plen = q ? (size_t)(q - s->target) : strlen(s->target);
+    *index = 0;
+    *hint_off = 0;
+    *hint_size = 0;
+    if ((plen < 3 || strncasecmp(s->target + plen - 3, ".7z", 3) != 0) && (!q || !strstr(q, "pkg_index="))) return 0;
+    if (q) {
+        char out[HTTP_PKG_URL_MAX];
+        size_t o = plen;
+        const char *p = q + 1;
+        int first = 1;
+        memcpy(out, s->target, plen);
+        out[o] = '\0';
+        while (*p) {
+            const char *e = strchr(p, '&');
+            size_t n = e ? (size_t)(e - p) : strlen(p);
+            if (n >= 10 && strncasecmp(p, "pkg_index=", 10) == 0) {
+                *index = (uint32_t)strtoul(p + 10, NULL, 10);
+            } else if (n >= 11 && strncasecmp(p, "pkg_offset=", 11) == 0) {
+                *hint_off = strtoull(p + 11, NULL, 10);
+            } else if (n >= 9 && strncasecmp(p, "pkg_size=", 9) == 0) {
+                *hint_size = strtoull(p + 9, NULL, 10);
+            } else if (n > 0) {
+                out[o++] = first ? '?' : '&';
+                first = 0;
+                memcpy(out + o, p, n);
+                o += n;
+                out[o] = '\0';
+            }
+            p += n;
+            if (*p == '&') p++;
+        }
+        snprintf(s->target, sizeof(s->target), "%s", out);
+        build_canonical(s->host, s->port, s->ipv6, s->https, s->target, s->url, sizeof(s->url), NULL, 0);
+    }
+    return 1;
+}
+
+static ssize_t sz_read(void *ctx, void *buf, size_t count, uint64_t offset) {
+    char err[160];
+    if (count == 0) return 0;
+    if (fetch_range((http_pkg_session_t *)ctx, offset, offset + count - 1, buf, count, err, sizeof(err)) != 0) return -1;
+    return (ssize_t)count;
+}
+
 int http_pkg_session_open(const char *url, http_pkg_session_t **out, char *err, size_t err_sz) {
     http_pkg_session_t *s;
-    uint8_t probe;
+    uint8_t probe[2];
+    uint32_t pkg_index = 0;
+    uint64_t hint_off = 0, hint_size = 0;
+    int is_7z;
     if (out) *out = NULL;
     if (!out) return -1;
     s = calloc(1, sizeof(*s));
@@ -982,11 +1039,30 @@ int http_pkg_session_open(const char *url, http_pkg_session_t **out, char *err, 
         free(s);
         return -1;
     }
-    if (fetch_range(s, 0, 0, &probe, 1, err, err_sz) != 0 || s->size == 0) {
+    is_7z = strip_pkg_index(s, &pkg_index, &hint_off, &hint_size);
+    if (fetch_range(s, 0, 1, probe, 2, err, err_sz) != 0 || s->size == 0) {
         if (err && err[0] == '\0') set_err(err, err_sz, "The remote file is empty");
         close_fd(s);
         free(s);
         return -1;
+    }
+    if (!is_7z && probe[0] == '7' && probe[1] == 'z') {
+        is_7z = 1;
+    }
+    if (is_7z) {
+        uint64_t base = 0, view = 0;
+        if (hint_size > 0 && hint_off >= 32 && hint_off <= s->size && hint_size <= s->size - hint_off) {
+            base = hint_off;
+            view = hint_size;
+        } else if (sevenzip_find_raw_pkg(sz_read, s, s->size, pkg_index, &base, &view, err, err_sz) != 0) {
+            close_fd(s);
+            free(s);
+            return -1;
+        }
+        s->base = base;
+        s->view = view;
+        s->pkg_index = pkg_index;
+        s->is_7z = 1;
     }
     if (pthread_mutex_init(&s->lock, NULL) != 0) {
         close_fd(s);
@@ -1014,17 +1090,20 @@ static ssize_t meta_read(http_pkg_session_t *s, void *buf, size_t count, uint64_
 ssize_t http_pkg_session_read(http_pkg_session_t *session, void *buf, size_t count, uint64_t offset) {
     uint64_t end;
     char err[160];
+    uint64_t lim;
     if (!session || !buf) return -1;
     pthread_mutex_lock(&session->lock);
-    if (offset >= session->size) {
+    lim = session->view ? session->view : session->size;
+    if (offset >= lim) {
         pthread_mutex_unlock(&session->lock);
         return 0;
     }
-    if (count > session->size - offset) count = (size_t)(session->size - offset);
+    if (count > lim - offset) count = (size_t)(lim - offset);
     if (count == 0 || count > HTTP_PKG_READ_MAX || offset > UINT64_MAX - (count - 1)) {
         pthread_mutex_unlock(&session->lock);
         return count == 0 ? 0 : -1;
     }
+    offset += session->base;
     if (count <= META_CACHE_MAX_READ) {
         ssize_t r = meta_read(session, buf, count, offset);
         if (r != -2) {
@@ -1047,10 +1126,12 @@ int http_pkg_session_stream(http_pkg_session_t *session, uint64_t start, uint64_
     int rc;
     if (!session || !buf || buf_sz == 0 || !sink || end < start) return -1;
     pthread_mutex_lock(&session->lock);
-    if (end >= session->size) {
+    if (end >= (session->view ? session->view : session->size)) {
         pthread_mutex_unlock(&session->lock);
         return -1;
     }
+    start += session->base;
+    end += session->base;
     if (end - start < META_CACHE_MAX_READ) {
         uint64_t pos = start;
         int served = 1;
@@ -1082,7 +1163,7 @@ int http_pkg_session_stream(http_pkg_session_t *session, uint64_t start, uint64_
 }
 
 uint64_t http_pkg_session_size(const http_pkg_session_t *session) {
-    return session ? session->size : 0;
+    return session ? (session->view ? session->view : session->size) : 0;
 }
 
 void http_pkg_session_close(http_pkg_session_t *session) {
@@ -1135,6 +1216,13 @@ static int parse_session(http_pkg_session_t *sess, const char *url, pkg_detail_t
 
     memset(out, 0, sizeof(*out));
     snprintf(out->path, sizeof(out->path), "%s", url);
+    if (sess->is_7z) {
+        size_t n = strlen(out->path);
+        snprintf(out->path + n, sizeof(out->path) - n, "%spkg_index=%u&pkg_offset=%llu&pkg_size=%llu",
+                 strchr(out->path, '?') ? "&" : "?", (unsigned)sess->pkg_index,
+                 (unsigned long long)sess->base, (unsigned long long)sess->view);
+        url = out->path;
+    }
     http_pkg_filename(url, out->filename, sizeof(out->filename));
     out->file_size = http_pkg_session_size(sess);
     out->total_pkg_size = out->file_size;
