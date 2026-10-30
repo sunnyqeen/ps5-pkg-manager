@@ -9,6 +9,7 @@
 #include "http_pkg.h"
 #include "multipart.h"
 #include "installer.h"
+#include "meta_cache.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -34,8 +35,13 @@
 #define HTTP_PKG_IO_SEC 60
 #define HTTP_PKG_HDR_MAX 8192
 #define HTTP_PKG_READ_MAX (16U * 1024U * 1024U)
+/* Max bytes per recv()/sceHttpReadData() call while reading a body. */
+#ifndef HTTP_PKG_READ_CHUNK
+#define HTTP_PKG_READ_CHUNK (1U * 1024U * 1024U)
+#endif
 
 struct http_pkg_session {
+    char validator[32];
     char url[HTTP_PKG_URL_MAX];
     char host[256];
     char host_header[300];
@@ -547,6 +553,14 @@ static int header_u64(const char *headers, const char *name, uint64_t *out) {
     return 0;
 }
 
+/* Remember the file validator so cached blocks are only shared between sessions
+ * that saw the same version of the file. */
+static void note_validator(http_pkg_session_t *s, const char *headers) {
+    const char *lm = header_value(headers, "Last-Modified");
+    int lml = lm ? (int)strcspn(lm, "\r\n") : 0;
+    snprintf(s->validator, sizeof(s->validator), "%.*s", lml, lm ? lm : "");
+}
+
 static int parse_content_range(const char *value, uint64_t *start, uint64_t *end, uint64_t *total) {
     unsigned long long s, e, t;
     if (!value) return -1;
@@ -571,7 +585,10 @@ static int read_exact(int fd, uint8_t *dst, size_t len, const uint8_t *prefix, s
         off = prefix_len;
     }
     while (off < len) {
-        ssize_t n = recv(fd, dst + off, len - off, 0);
+        size_t want = len - off;
+        ssize_t n;
+        if (want > HTTP_PKG_READ_CHUNK) want = HTTP_PKG_READ_CHUNK;
+        n = recv(fd, dst + off, want, 0);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -659,9 +676,10 @@ static int resolve_redirect(http_pkg_session_t *s, const char *location, char *d
 }
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
-static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint8_t *body, size_t body_len,
-                       char *err, size_t err_sz) {
+static int fetch_range_ex(http_pkg_session_t *s, uint64_t start, uint64_t end, uint8_t *body, size_t body_len,
+                          http_pkg_sink_fn sink, void *sink_ctx, char *err, size_t err_sz) {
     char location_url[HTTP_PKG_URL_MAX];
+    uint64_t total_len = end - start + 1;
     for (int hop = 0; hop <= HTTP_PKG_MAX_REDIRECTS; hop++) {
         char range[80];
         char hdrbuf[HTTP_PKG_HDR_MAX];
@@ -750,7 +768,7 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
         }
         if (parse_content_range(header_value(hdrbuf, "Content-Range"), &range_start, &range_end, &range_total) != 0 ||
             range_start != start || range_end != end || range_end < range_start ||
-            range_end - range_start + 1 != body_len ||
+            range_end - range_start + 1 != total_len ||
             (s->size != 0 && s->size != range_total)) {
             sceHttpDeleteRequest(req);
             close_fd(s);
@@ -758,16 +776,28 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
             return -1;
         }
         s->size = range_total;
-        while (got < body_len) {
-            unsigned int chunk = (unsigned int)(body_len - got > 0x100000u ? 0x100000u : body_len - got);
-            int n = sceHttpReadData(req, body + got, chunk);
-            if (n <= 0) {
+        note_validator(s, hdrbuf);
+        for (uint64_t done = 0; done < total_len;) {
+            size_t target = total_len - done > body_len ? body_len : (size_t)(total_len - done);
+            got = 0;
+            while (got < target) {
+                unsigned int chunk = (unsigned int)(target - got > HTTP_PKG_READ_CHUNK ? HTTP_PKG_READ_CHUNK : target - got);
+                int n = sceHttpReadData(req, body + got, chunk);
+                if (n <= 0) {
+                    sceHttpDeleteRequest(req);
+                    close_fd(s);
+                    set_err(err, err_sz, "Could not read the remote package");
+                    return -1;
+                }
+                got += (size_t)n;
+            }
+            if (sink && sink(sink_ctx, body, got) != 0) {
                 sceHttpDeleteRequest(req);
                 close_fd(s);
-                set_err(err, err_sz, "Could not read the remote package");
+                set_err(err, err_sz, "Stream aborted");
                 return -1;
             }
-            got += (size_t)n;
+            done += got;
         }
         sceHttpDeleteRequest(req);
         return 0;
@@ -777,9 +807,10 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
     return -1;
 }
 #else
-static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint8_t *body, size_t body_len,
-                       char *err, size_t err_sz) {
+static int fetch_range_ex(http_pkg_session_t *s, uint64_t start, uint64_t end, uint8_t *body, size_t body_len,
+                          http_pkg_sink_fn sink, void *sink_ctx, char *err, size_t err_sz) {
     char location_url[HTTP_PKG_URL_MAX];
+    uint64_t total_len = end - start + 1;
     for (int hop = 0; hop <= HTTP_PKG_MAX_REDIRECTS; hop++) {
         char req[HTTP_PKG_URL_MAX + 512];
         char hdr[HTTP_PKG_HDR_MAX];
@@ -886,7 +917,7 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
         }
         if (parse_content_range(header_value(hdr, "Content-Range"), &range_start, &range_end, &range_total) != 0 ||
             range_start != start || range_end != end || range_end < range_start ||
-            range_end - range_start + 1 != body_len) {
+            range_end - range_start + 1 != total_len) {
             close_fd(s);
             set_err(err, err_sz, "Could not read the remote package");
             return -1;
@@ -897,19 +928,29 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
             return -1;
         }
         s->size = range_total;
+        note_validator(s, hdr);
         if (header_u64(hdr, "Content-Length", &content_len) != 0) {
             /* A keep-alive response without a length would leave unread bytes
              * in front of the next range request. */
             keep = 0;
-        } else if (content_len != body_len) {
+        } else if (content_len != total_len) {
             close_fd(s);
             set_err(err, err_sz, "Could not read the remote package");
             return -1;
         }
-        if (read_exact(s->fd, body, body_len, prefix, prefix_len) != 0) {
-            close_fd(s);
-            set_err(err, err_sz, "Could not read the remote package");
-            return -1;
+        for (uint64_t done = 0; done < total_len;) {
+            size_t target = total_len - done > body_len ? body_len : (size_t)(total_len - done);
+            if (read_exact(s->fd, body, target, done == 0 ? prefix : NULL, done == 0 ? prefix_len : 0) != 0) {
+                close_fd(s);
+                set_err(err, err_sz, "Could not read the remote package");
+                return -1;
+            }
+            if (sink && sink(sink_ctx, body, target) != 0) {
+                close_fd(s);
+                set_err(err, err_sz, "Stream aborted");
+                return -1;
+            }
+            done += target;
         }
         if (!keep) close_fd(s);
         return 0;
@@ -919,6 +960,11 @@ static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint
     return -1;
 }
 #endif
+
+static int fetch_range(http_pkg_session_t *s, uint64_t start, uint64_t end, uint8_t *body, size_t body_len,
+                       char *err, size_t err_sz) {
+    return fetch_range_ex(s, start, end, body, body_len, NULL, NULL, err, err_sz);
+}
 
 int http_pkg_session_open(const char *url, http_pkg_session_t **out, char *err, size_t err_sz) {
     http_pkg_session_t *s;
@@ -953,6 +999,18 @@ int http_pkg_session_open(const char *url, http_pkg_session_t **out, char *err, 
     return 0;
 }
 
+static ssize_t meta_fetch(void *ctx, void *buf, size_t len, uint64_t off) {
+    char err[160];
+    if (fetch_range((http_pkg_session_t *)ctx, off, off + len - 1, buf, len, err, sizeof(err)) != 0) return -1;
+    return (ssize_t)len;
+}
+
+/* Small reads (header/metadata probes) come from the shared meta cache. Returns
+ * count, -1 on a fetch error, or -2 when the cache cannot be used. */
+static ssize_t meta_read(http_pkg_session_t *s, void *buf, size_t count, uint64_t offset) {
+    return meta_cache_read(s->url, s->size, s->validator, buf, count, offset, meta_fetch, s);
+}
+
 ssize_t http_pkg_session_read(http_pkg_session_t *session, void *buf, size_t count, uint64_t offset) {
     uint64_t end;
     char err[160];
@@ -967,6 +1025,13 @@ ssize_t http_pkg_session_read(http_pkg_session_t *session, void *buf, size_t cou
         pthread_mutex_unlock(&session->lock);
         return count == 0 ? 0 : -1;
     }
+    if (count <= META_CACHE_MAX_READ) {
+        ssize_t r = meta_read(session, buf, count, offset);
+        if (r != -2) {
+            pthread_mutex_unlock(&session->lock);
+            return r;
+        }
+    }
     end = offset + count - 1;
     if (fetch_range(session, offset, end, (uint8_t *)buf, count, err, sizeof(err)) != 0) {
         pthread_mutex_unlock(&session->lock);
@@ -974,6 +1039,46 @@ ssize_t http_pkg_session_read(http_pkg_session_t *session, void *buf, size_t cou
     }
     pthread_mutex_unlock(&session->lock);
     return (ssize_t)count;
+}
+
+int http_pkg_session_stream(http_pkg_session_t *session, uint64_t start, uint64_t end,
+                            void *buf, size_t buf_sz, http_pkg_sink_fn sink, void *ctx) {
+    char err[160];
+    int rc;
+    if (!session || !buf || buf_sz == 0 || !sink || end < start) return -1;
+    pthread_mutex_lock(&session->lock);
+    if (end >= session->size) {
+        pthread_mutex_unlock(&session->lock);
+        return -1;
+    }
+    if (end - start < META_CACHE_MAX_READ) {
+        uint64_t pos = start;
+        int served = 1;
+        while (pos <= end) {
+            size_t n = end - pos + 1 > buf_sz ? buf_sz : (size_t)(end - pos + 1);
+            ssize_t r = meta_read(session, buf, n, pos);
+            if (r != (ssize_t)n) {
+                if (pos == start) served = 0;
+                else {
+                    pthread_mutex_unlock(&session->lock);
+                    return -1;
+                }
+                break;
+            }
+            if (sink(ctx, buf, n) != 0) {
+                pthread_mutex_unlock(&session->lock);
+                return -1;
+            }
+            pos += n;
+        }
+        if (served) {
+            pthread_mutex_unlock(&session->lock);
+            return 0;
+        }
+    }
+    rc = fetch_range_ex(session, start, end, (uint8_t *)buf, buf_sz, sink, ctx, err, sizeof(err));
+    pthread_mutex_unlock(&session->lock);
+    return rc;
 }
 
 uint64_t http_pkg_session_size(const http_pkg_session_t *session) {
