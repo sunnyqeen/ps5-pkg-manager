@@ -494,18 +494,8 @@ static int send_all(int fd, const char *buf, size_t len) {
 }
 
 static int recv_headers(int fd, char *buf, size_t cap, size_t *hdr_len, size_t *total) {
-    size_t n = 0;
+    size_t n = 0, scanned = 0;
     while (n + 1 < cap) {
-        if (n >= 4) {
-            for (size_t i = 0; i + 4 <= n; i++) {
-                if (memcmp(buf + i, "\r\n\r\n", 4) == 0) {
-                    *hdr_len = i + 4;
-                    *total = n;
-                    buf[n] = '\0';
-                    return 0;
-                }
-            }
-        }
         ssize_t r = recv(fd, buf + n, cap - 1 - n, 0);
         if (r < 0) {
             if (errno == EINTR) continue;
@@ -513,6 +503,17 @@ static int recv_headers(int fd, char *buf, size_t cap, size_t *hdr_len, size_t *
         }
         if (r == 0) return -1;
         n += (size_t)r;
+        /* Scan after every read: one recv can fill the buffer with the
+         * headers plus the start of the body. */
+        for (size_t i = scanned; i + 4 <= n; i++) {
+            if (memcmp(buf + i, "\r\n\r\n", 4) == 0) {
+                *hdr_len = i + 4;
+                *total = n;
+                buf[n] = '\0';
+                return 0;
+            }
+        }
+        scanned = n >= 3 ? n - 3 : 0;
     }
     return -1;
 }
