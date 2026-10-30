@@ -263,6 +263,25 @@ int stream_server_is_running(void) {
     return g_ss.running;
 }
 
+typedef struct {
+    int fd;
+    uint64_t sent;
+    int failed_send;
+} stream_http_fwd_t;
+
+static int send_all(int fd, const void *buf, size_t len);
+
+static int stream_http_sink(void *ctx, const void *data, size_t len) {
+    stream_http_fwd_t *fw = (stream_http_fwd_t *)ctx;
+    if (send_all(fw->fd, data, len) != 0) {
+        fw->failed_send = 1;
+        return -1;
+    }
+    installer_notify_bytes_streamed((uint64_t)len);
+    fw->sent += len;
+    return 0;
+}
+
 static int send_all(int fd, const void *buf, size_t len) {
     const char *p = (const char *)buf;
     size_t sent = 0;
@@ -899,7 +918,19 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
     if (vp == NULL) {
         end_reason = "server-stopping";
     }
-    while (vp != NULL && off <= end && g_ss.running) {
+    if (vp != NULL && conn_http != NULL && conn_smb == NULL) {
+        stream_http_fwd_t fw = { conn, 0, 0 };
+        if (http_pkg_session_stream(conn_http, start, end, sbuf, STREAM_SEND_CHUNK, stream_http_sink, &fw) == 0) {
+            sent_total = fw.sent;
+            off = end + 1;
+        } else {
+            sent_total = fw.sent;
+            off = start + fw.sent;
+            end_reason = fw.failed_send ? "client-disconnect" : "read-short";
+            if (!fw.failed_send && !vp->is_live && g_ss.running) installer_notify_source_error(vp->parts[0].path);
+        }
+    }
+    while (vp != NULL && conn_http == NULL && off <= end && g_ss.running) {
         uint64_t remain = end - off + 1;
         size_t want = (remain > STREAM_SEND_CHUNK) ? STREAM_SEND_CHUNK : (size_t)remain;
         ssize_t n;

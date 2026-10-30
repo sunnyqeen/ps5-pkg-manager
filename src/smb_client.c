@@ -7,6 +7,7 @@
 
 #include "smb_client.h"
 #include "smb_debug_log.h"
+#include "meta_cache.h"
 #include "pkg_cache.h"
 #include "pkg_parser.h"
 #include "icon_blurhash.h"
@@ -1102,7 +1103,7 @@ static int smb_file_session_queued_credits(const struct smb2_context *ctx) {
     return total;
 }
 
-ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t count, uint64_t offset) {
+static ssize_t smb_file_session_read_net(smb_file_session_t *session, void *buf, size_t count, uint64_t offset) {
     if (!session || !buf) return -1;
     if (count == 0) return 0;
 
@@ -1309,6 +1310,26 @@ uint64_t smb_file_session_get_size(smb_file_session_t *session) {
 uint64_t smb_file_session_get_mtime(smb_file_session_t *session) {
     return session ? session->mtime : 0;
 }
+
+static ssize_t smb_meta_fetch(void *ctx, void *buf, size_t len, uint64_t off) {
+    return smb_file_session_read_net((smb_file_session_t *)ctx, buf, len, off);
+}
+
+/* Small reads (header/metadata probes) use the process-wide meta cache keyed by
+ * url, size and mtime. Local files skip it. */
+ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t count, uint64_t offset) {
+    char validator[32];
+    ssize_t r;
+    if (!session || !buf) return -1;
+    if (count == 0) return 0;
+    if (session->local_fd >= 0 || count > META_CACHE_MAX_READ)
+        return smb_file_session_read_net(session, buf, count, offset);
+    snprintf(validator, sizeof(validator), "%llu", (unsigned long long)session->mtime);
+    r = meta_cache_read(session->url, session->file_size, validator, buf, count, offset, smb_meta_fetch, session);
+    if (r == -2) return smb_file_session_read_net(session, buf, count, offset);
+    return r;
+}
+
 
 void smb_file_session_close(smb_file_session_t *session) {
     if (!session) return;

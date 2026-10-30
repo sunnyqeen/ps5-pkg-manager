@@ -26,6 +26,14 @@ void http_pkg_filename(const char *url, char *out, size_t out_sz);
  * On the PS5, libSceHttp fetches http:// and https://. err is optional. */
 int http_pkg_session_open(const char *url, http_pkg_session_t **out, char *err, size_t err_sz);
 ssize_t http_pkg_session_read(http_pkg_session_t *session, void *buf, size_t count, uint64_t offset);
+/* Receives each chunk of a streamed range. Return 0 to continue, nonzero to abort. */
+typedef int (*http_pkg_sink_fn)(void *ctx, const void *data, size_t len);
+
+/* Forward the raw range [start,end] as ONE upstream request. The body is
+ * delivered to sink in pieces of at most buf_sz bytes through buf. Small
+ * reads via http_pkg_session_read share one cached metadata block. */
+int http_pkg_session_stream(http_pkg_session_t *session, uint64_t start, uint64_t end,
+                            void *buf, size_t buf_sz, http_pkg_sink_fn sink, void *ctx);
 uint64_t http_pkg_session_size(const http_pkg_session_t *session);
 void http_pkg_session_close(http_pkg_session_t *session);
 

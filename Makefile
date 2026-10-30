@@ -20,7 +20,7 @@ LIBS     := $(TARGET)/lib/libmicrohttpd.a \
             -lSceNetCtl -lSceUserService -lSceSystemService \
             -lSceAppInstUtil -lSceSsl -lSceHttp -lSceNet
 
-SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/http_pkg.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/install_queue.c \
+SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/http_pkg.c src/meta_cache.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/install_queue.c \
         src/http_server.c src/stream_server.c src/stream_debug_log.c src/notification.c \
         src/multipart.c src/miniz.c src/app_info.c src/sqlite3.c src/icon_blurhash.c src/leftovers.c src/app_diag.c \
         src/app_installer.c
