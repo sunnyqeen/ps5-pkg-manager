@@ -362,7 +362,7 @@ static void append_to_log_file(const char *filepath, const char *line) {
 }
 
 void install_log(const char *fmt, ...) {
-    char buf[MAX_LOG_LINE_LEN - 40];
+    char buf[MAX_LOG_LINE_LEN * 2 - 40];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
@@ -388,7 +388,7 @@ void install_log(const char *fmt, ...) {
         snprintf(time_str, sizeof(time_str), "%lu", (unsigned long)now);
     }
 
-    char full_line[MAX_LOG_LINE_LEN];
+    char full_line[MAX_LOG_LINE_LEN * 2];
     snprintf(full_line, sizeof(full_line), "[%s] %s", time_str, buf);
 
     /* 1. Print to stdout */
