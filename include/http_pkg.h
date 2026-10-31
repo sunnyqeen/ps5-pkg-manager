@@ -6,8 +6,8 @@
 #include <sys/types.h>
 #include "pkg_parser.h"
 
-/* Queued install paths are 511 characters plus a NUL. */
-#define HTTP_PKG_URL_MAX 512
+/* Queued install paths are 1023 characters plus a NUL. */
+#define HTTP_PKG_URL_MAX 1024
 
 /* Opaque keep-alive client for one remote package. */
 typedef struct http_pkg_session http_pkg_session_t;

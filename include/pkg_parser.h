@@ -9,7 +9,7 @@
 #define PKG_LOCALIZED_TITLES_LEN 2048
 #define PKG_DEFAULT_LANG_LEN 32
 #define PKG_CONTENT_ID_LEN 64
-#define PKG_PATH_LEN 512
+#define PKG_PATH_LEN 1024
 
 typedef enum {
     PKG_TYPE_UNKNOWN = 0,

@@ -1083,7 +1083,10 @@ static void *listener_fn(void *arg) {
         strncpy(ca->peer, peer, sizeof(ca->peer) - 1);
         ca->peer[sizeof(ca->peer) - 1] = '\0';
         pthread_t wth;
-        if (pthread_create(&wth, NULL, connection_worker, ca) == 0) {
+        pthread_attr_t attr = {0};
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024);
+        if (pthread_create(&wth, &attr, connection_worker, ca) == 0) {
             pthread_detach(wth);
         } else {
             install_log("[STREAM] conn #%d peer=%s ERROR: worker spawn failed (%s), serving inline",

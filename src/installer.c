@@ -522,7 +522,7 @@ static int installer_wait_for_part(const uint8_t *package_uuid, const char *pkg_
                                    char *out_path, size_t out_max) {
     /* Snapshot install state under lock: g_status may be mutated by
      * cancel/status threads while we block for up to 60 minutes. */
-    char pkg_path_copy[512];
+    char pkg_path_copy[1024];
     pthread_mutex_lock(&g_installer_mutex);
     strncpy(pkg_path_copy, g_status.pkg_path, sizeof(pkg_path_copy) - 1);
     pkg_path_copy[sizeof(pkg_path_copy) - 1] = '\0';
@@ -1020,7 +1020,7 @@ static void *stream_installer_worker(void *arg) {
 
     /* Snapshot state under lock at thread entry (happens-after
      * installer_start commit via pthread_create). */
-    char worker_pkg_path[512];
+    char worker_pkg_path[1024];
     int worker_is_multipart = 0;
     pthread_mutex_lock(&g_installer_mutex);
     strncpy(worker_pkg_path, g_status.pkg_path, sizeof(worker_pkg_path) - 1);
@@ -1030,7 +1030,7 @@ static void *stream_installer_worker(void *arg) {
 
     int is_filesystem_install = 0;
     int can_fallback_to_direct = is_usb_or_disc_path(worker_pkg_path) && !worker_is_multipart;
-    char passthrough_url[512];
+    char passthrough_url[1024];
     int is_passthrough = installer_passthrough_url(worker_pkg_path, passthrough_url, sizeof(passthrough_url)) == 1;
 
     if (is_passthrough) {
@@ -1793,7 +1793,7 @@ static void *stream_installer_worker(void *arg) {
         free(extracted_icon);
         return NULL;
     } else {
-        char mock_pkg_path[512];
+        char mock_pkg_path[1024];
         pthread_mutex_lock(&g_installer_mutex);
         strncpy(mock_pkg_path, g_status.pkg_path, sizeof(mock_pkg_path) - 1);
         mock_pkg_path[sizeof(mock_pkg_path) - 1] = '\0';
@@ -1945,8 +1945,8 @@ static int installer_start_internal(const char *pkg_path) {
         pthread_join(old_thr, NULL);
     }
 
-    char pkg_path_copy[512];
-    char pass_url[512];
+    char pkg_path_copy[1024];
+    char pass_url[1024];
     int pass_rc;
     strncpy(pkg_path_copy, pkg_path, sizeof(pkg_path_copy) - 1);
     pkg_path_copy[sizeof(pkg_path_copy) - 1] = '\0';

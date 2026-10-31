@@ -13,7 +13,7 @@
 
 typedef struct {
     int is_installing;
-    char pkg_path[512];
+    char pkg_path[1024];
     char title_id[32];
     char title_name[256];
     char content_id[64];

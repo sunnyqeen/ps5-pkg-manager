@@ -528,7 +528,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
          * not follow redirects itself. */
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/remote") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;
-            char link[600] = {0};
+            char link[1024] = {0};
             char err[160] = {0};
             pkg_detail_t pkg;
             char *response = NULL;
@@ -1478,8 +1478,8 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     /* ── POST /api/install ─────────────────────────────────────── */
     if (strcmp(method, "POST") == 0 && strcmp(url, "/api/install") == 0) {
         post_state_t *ps = (post_state_t *)*con_cls;
-        char target_path[512] = {0};
-        char update_path[512] = {0};
+        char target_path[1024] = {0};
+        char update_path[1024] = {0};
 
         if (ps && ps->data) {
             extract_json_string_value(ps->data, "path", target_path, sizeof(target_path));

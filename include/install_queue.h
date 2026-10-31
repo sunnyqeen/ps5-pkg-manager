@@ -15,7 +15,7 @@ typedef enum {
 /* Browser files are referenced by an opaque key, never a live upload URI.
  * Only the selected browser job may create/attach an upload session. */
 typedef struct {
-    char path[512];
+    char path[1024];
     char owner[65];
     char file_key[512];
     char title_id[32];

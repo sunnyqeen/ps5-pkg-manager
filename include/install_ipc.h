@@ -26,7 +26,7 @@ typedef struct {
     uint32_t op;
     char uri[1024];
     char name[320];
-    char icon_url[512];
+    char icon_url[1024];
     char title_id[32];
     char directory[64];
 } install_ipc_request_t;

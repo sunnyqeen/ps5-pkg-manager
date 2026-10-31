@@ -221,7 +221,7 @@ int install_queue_cancel(uint64_t id) {
     job->state = active ? QUEUE_CANCELING : QUEUE_CANCELED;
     if (!active) job->finished = time(NULL);
     snprintf(job->error, sizeof(job->error), "Canceled");
-    char owner[65], live_path[80], pkg_path[512], title_id[32];
+    char owner[65], live_path[80], pkg_path[1024], title_id[32];
     snprintf(title_id, sizeof(title_id), "%s", job->request.title_id);
     snprintf(pkg_path, sizeof(pkg_path), "%s", job->request.path);
     snprintf(owner, sizeof(owner), "%s", job->request.owner);
